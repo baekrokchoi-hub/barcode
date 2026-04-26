@@ -1,73 +1,579 @@
-<!-- 🔥 변경된 핵심만 표시 (전체 그대로 복붙 가능) -->
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+  <title>바코드 & QR 스캐너</title>
+  <!-- Quagga: 바코드 전용 -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/quagga/0.12.1/quagga.min.js"></script>
+  <!-- jsQR: QR코드 전용 (canvas 기반, 매우 안정적) -->
+  <script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js"></script>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=Noto+Sans+KR:wght@300;400;700&display=swap');
+
+    :root {
+      --bg: #0d0f14;
+      --surface: #161a22;
+      --card: #1e2430;
+      --border: #2a3040;
+      --accent: #00e5a0;
+      --accent2: #0077ff;
+      --qr-color: #a78bfa;
+      --warn: #ff4d6d;
+      --text: #e8eaf0;
+      --muted: #6b7590;
+      --mono: 'IBM Plex Mono', monospace;
+      --sans: 'Noto Sans KR', sans-serif;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      background: var(--bg); color: var(--text);
+      font-family: var(--sans); min-height: 100vh;
+      display: flex; flex-direction: column; overflow-x: hidden;
+    }
+
+    /* ── Header ── */
+    .header {
+      padding: 15px 20px 12px; border-bottom: 1px solid var(--border);
+      display: flex; align-items: center; gap: 12px; background: var(--surface);
+    }
+    .header-icon {
+      width: 36px; height: 36px; flex-shrink: 0;
+      background: linear-gradient(135deg, var(--accent), var(--qr-color));
+      border-radius: 8px; display: flex; align-items: center; justify-content: center;
+    }
+    .header-icon svg { width: 20px; height: 20px; }
+    .header h1 { font-size: 17px; font-weight: 700; letter-spacing: -0.3px; }
+    .header-sub { font-size: 10px; color: var(--muted); font-family: var(--mono); margin-left: auto; white-space: nowrap; }
+
+    /* ── Mode badges ── */
+    .mode-badges {
+      display: flex; gap: 6px; padding: 8px 20px;
+      background: var(--surface); border-bottom: 1px solid var(--border); align-items: center;
+    }
+    .badge { font-size: 11px; font-family: var(--mono); padding: 3px 9px; border-radius: 20px; border: 1px solid; }
+    .badge.barcode { border-color: var(--accent); color: var(--accent); }
+    .badge.qr { border-color: var(--qr-color); color: var(--qr-color); }
+    .badge.info { border-color: var(--border); color: var(--muted); margin-left: auto; }
+
+    /* ── Tabs ── */
+    .tabs { display: flex; background: var(--surface); border-bottom: 1px solid var(--border); }
+    .tab {
+      flex: 1; padding: 11px; text-align: center; font-size: 13px; font-weight: 600;
+      color: var(--muted); cursor: pointer; border-bottom: 2px solid transparent;
+      transition: all 0.2s; user-select: none;
+    }
+    .tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+
+    /* ── Panels ── */
+    .panel { display: none; flex: 1; flex-direction: column; }
+    .panel.active { display: flex; }
+
+    /* ── Scanner area ── */
+    .scanner-wrap {
+      position: relative; width: 100%; background: #000; overflow: hidden;
+    }
+    /* QR: canvas overlay, Barcode: quagga video */
+    #qr-canvas-wrap { display: none; position: relative; }
+    #qr-canvas-wrap canvas#qr-canvas { width: 50%; display: block; }
+    #barcode-wrap { display: none; position: relative; }
+    #barcode-wrap video { width: 50%; display: block; }
+    #barcode-wrap canvas.drawingBuffer { position: absolute; top:0; left:0; width:100%; height:100%; }
+
+    /* Viewfinder overlay */
+    .viewfinder {
+      position: absolute; top: 0; left: 0; right: 0; bottom: 0;
+      pointer-events: none; display: flex; align-items: center; justify-content: center;
+    }
+    .vf-box {
+      position: relative; border: 2px solid; border-radius: 8px;
+      box-shadow: 0 0 0 2000px rgba(0,0,0,0.5); transition: all 0.3s;
+    }
+    .vf-box.barcode-mode { width: 75%; aspect-ratio: 3/1; border-color: var(--accent); }
+    .vf-box.qr-mode { width: 56%; aspect-ratio: 1/1; border-color: var(--qr-color); }
+    .vf-line {
+      position: absolute; left: 5%; width: 90%; height: 2px;
+      animation: scanLine 1.8s ease-in-out infinite;
+    }
+    .vf-box.barcode-mode .vf-line { background: linear-gradient(90deg, transparent, var(--accent), transparent); }
+    .vf-box.qr-mode .vf-line { background: linear-gradient(90deg, transparent, var(--qr-color), transparent); }
+    @keyframes scanLine {
+      0% { top: 10%; opacity: 0.3; } 50% { opacity: 1; } 100% { top: 90%; opacity: 0.3; }
+    }
+    .vf-corner { position: absolute; width: 16px; height: 16px; border-style: solid; }
+    .vf-box.barcode-mode .vf-corner { border-color: var(--accent); }
+    .vf-box.qr-mode .vf-corner { border-color: var(--qr-color); }
+    .vf-corner.tl { top:-2px; left:-2px; border-width:3px 0 0 3px; border-radius:4px 0 0 0; }
+    .vf-corner.tr { top:-2px; right:-2px; border-width:3px 3px 0 0; border-radius:0 4px 0 0; }
+    .vf-corner.bl { bottom:-2px; left:-2px; border-width:0 0 3px 3px; border-radius:0 0 0 4px; }
+    .vf-corner.br { bottom:-2px; right:-2px; border-width:0 3px 3px 0; border-radius:0 0 4px 0; }
+    .vf-type-label {
+      position: absolute; bottom: -26px; left: 50%; transform: translateX(-50%);
+      font-family: var(--mono); font-size: 10px; white-space: nowrap; letter-spacing: 0.5px;
+    }
+    .vf-box.barcode-mode .vf-type-label { color: var(--accent); }
+    .vf-box.qr-mode .vf-type-label { color: var(--qr-color); }
+
+    /* ── Controls ── */
+    .scanner-controls {
+      padding: 12px 20px; background: var(--surface);
+      border-bottom: 1px solid var(--border); display: flex; flex-direction: column; gap: 10px;
+    }
+    .mode-toggle { display: flex; background: var(--card); border-radius: 10px; padding: 4px; gap: 4px; }
+    .mode-btn {
+      flex: 1; padding: 8px; border-radius: 7px; border: none; background: transparent;
+      color: var(--muted); font-size: 12px; font-weight: 700; font-family: var(--sans);
+      cursor: pointer; transition: all 0.2s; display: flex; align-items: center; justify-content: center; gap: 5px;
+    }
+    .mode-btn.active-barcode { background: rgba(0,229,160,0.15); color: var(--accent); }
+    .mode-btn.active-qr { background: rgba(167,139,250,0.15); color: var(--qr-color); }
+    .mode-btn svg { width: 14px; height: 14px; flex-shrink: 0; }
+
+    .btn-scan {
+      width: 100%; padding: 13px; background: var(--accent); color: #000;
+      border: none; border-radius: 10px; font-size: 15px; font-weight: 700; font-family: var(--sans);
+      cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 8px;
+      transition: opacity 0.2s, transform 0.1s;
+    }
+    .btn-scan:active { transform: scale(0.98); opacity: 0.85; }
+    .btn-scan.scanning { background: var(--warn); color: #fff; }
+    .btn-scan svg { width: 18px; height: 18px; flex-shrink: 0; }
+
+    /* ── Result ── */
+    .result-area { padding: 14px 20px; flex: 1; overflow-y: auto; }
+    .detected-box {
+      background: var(--card); border: 1px solid var(--border);
+      border-radius: 12px; padding: 14px 16px; margin-bottom: 14px; transition: border-color 0.3s;
+    }
+    .detected-box.hl-barcode { border-color: var(--accent); }
+    .detected-box.hl-qr { border-color: var(--qr-color); }
+    .detected-label {
+      font-size: 10px; font-family: var(--mono); letter-spacing: 1px; text-transform: uppercase;
+      margin-bottom: 5px; display: flex; align-items: center; gap: 6px;
+    }
+    .lbl-barcode { color: var(--accent); } .lbl-qr { color: var(--qr-color); }
+    .type-pill { font-size: 9px; padding: 2px 7px; border-radius: 20px; font-weight: 700; }
+    .pill-barcode { background: rgba(0,229,160,0.15); color: var(--accent); }
+    .pill-qr { background: rgba(167,139,250,0.15); color: var(--qr-color); }
+    .detected-value {
+      font-family: var(--mono); font-size: 15px; color: var(--text);
+      word-break: break-all; margin-bottom: 10px; line-height: 1.5;
+    }
+    .detected-value.empty { color: var(--muted); font-size: 13px; }
+
+    .slot-label { font-size: 12px; color: var(--muted); margin-bottom: 8px; }
+    .slot-row { display: flex; gap: 8px; margin-bottom: 12px; flex-wrap: wrap; }
+    .slot-btn {
+      flex: 1; min-width: 0; padding: 8px 4px; border-radius: 8px;
+      border: 1.5px solid var(--border); background: var(--surface); color: var(--muted);
+      font-size: 11px; font-family: var(--mono); cursor: pointer; transition: all 0.15s; text-align: center;
+    }
+    .slot-btn.selected { border-color: var(--accent2); color: var(--accent2); background: rgba(0,119,255,0.08); }
+    .slot-btn.filled { border-color: var(--accent); color: var(--accent); }
+    .slot-btn.filled-qr { border-color: var(--qr-color); color: var(--qr-color); }
+
+    .btn-save {
+      width: 100%; padding: 11px; background: transparent;
+      border: 1.5px solid var(--accent2); color: var(--accent2);
+      border-radius: 10px; font-size: 14px; font-weight: 700; font-family: var(--sans);
+      cursor: pointer; transition: all 0.2s; display: flex; align-items: center; justify-content: center; gap: 8px;
+    }
+    .btn-save:active { background: rgba(0,119,255,0.1); }
+    .btn-save:disabled { opacity: 0.3; cursor: not-allowed; }
+
+    /* Preview */
+    .preview-box {
+      background: var(--card); border: 1px solid var(--border);
+      border-radius: 12px; padding: 14px 16px; margin-bottom: 14px;
+    }
+    .slot-entry { display: flex; align-items: flex-start; gap: 10px; }
+    .slot-tag {
+      font-family: var(--mono); font-size: 10px; color: var(--muted);
+      background: var(--surface); border: 1px solid var(--border);
+      padding: 2px 7px; border-radius: 4px; flex-shrink: 0; margin-top: 2px;
+    }
+    .slot-tag.tag-barcode { border-color: rgba(0,229,160,0.4); color: var(--accent); }
+    .slot-tag.tag-qr { border-color: rgba(167,139,250,0.4); color: var(--qr-color); }
+    .slot-val { font-family: var(--mono); font-size: 13px; color: var(--text); word-break: break-all; flex: 1; }
+    .slot-val.empty-slot { color: var(--muted); font-size: 12px; font-style: italic; }
+    .action-row { display: flex; gap: 8px; margin-top: 12px; }
+    .btn-confirm {
+      flex: 1; padding: 11px; background: var(--accent2); color: #fff;
+      border: none; border-radius: 9px; font-size: 13px; font-weight: 700;
+      font-family: var(--sans); cursor: pointer;
+    }
+    .btn-confirm:disabled { opacity: 0.3; cursor: not-allowed; }
+    .btn-reset {
+      padding: 11px 14px; background: transparent; border: 1.5px solid var(--border);
+      color: var(--muted); border-radius: 9px; font-size: 13px; cursor: pointer; font-family: var(--sans);
+    }
+
+    /* Config */
+    .config-bar {
+      background: var(--surface); border-bottom: 1px solid var(--border);
+      padding: 9px 20px; display: flex; align-items: center; gap: 10px;
+    }
+    .config-bar label { font-size: 12px; color: var(--muted); flex-shrink: 0; }
+    .slots-toggle { display: flex; gap: 6px; }
+    .stoggle {
+      width: 34px; height: 30px; border-radius: 6px; border: 1.5px solid var(--border);
+      background: var(--card); color: var(--muted); font-size: 13px; font-weight: 700;
+      font-family: var(--mono); cursor: pointer; transition: all 0.15s;
+    }
+    .stoggle.active { border-color: var(--accent); color: var(--accent); background: rgba(0,229,160,0.08); }
+
+    /* Toast */
+    .toast {
+      position: fixed; bottom: 28px; left: 50%;
+      transform: translateX(-50%) translateY(20px);
+      padding: 10px 22px; border-radius: 30px; font-size: 13px; font-weight: 700;
+      opacity: 0; transition: all 0.3s; z-index: 999; white-space: nowrap;
+    }
+    .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+    .toast.barcode { background: var(--accent); color: #000; }
+    .toast.qr { background: var(--qr-color); color: #000; }
+    .toast.neutral { background: var(--accent2); color: #fff; }
+    .toast.del { background: var(--warn); color: #fff; }
+
+    /* List */
+    .list-header {
+      padding: 14px 20px; display: flex; align-items: center; justify-content: space-between;
+      border-bottom: 1px solid var(--border);
+    }
+    .list-header h2 { font-size: 14px; font-weight: 700; }
+    .list-count { font-family: var(--mono); font-size: 12px; color: var(--muted); }
+    .btn-clear-all { font-size: 12px; color: var(--warn); background: none; border: none; cursor: pointer; font-family: var(--sans); }
+    .list-body { flex: 1; overflow-y: auto; padding: 12px 20px 24px; }
+    .empty-state { text-align: center; padding: 60px 20px; color: var(--muted); }
+    .empty-state svg { width: 40px; height: 40px; margin-bottom: 12px; opacity: 0.25; }
+    .empty-state p { font-size: 14px; line-height: 1.7; }
+    .list-item {
+      background: var(--card); border: 1px solid var(--border);
+      border-radius: 12px; margin-bottom: 10px; overflow: hidden; animation: fadeIn 0.22s ease;
+    }
+    @keyframes fadeIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+    .item-header {
+      padding: 9px 14px; display: flex; align-items: center; justify-content: space-between;
+      border-bottom: 1px solid var(--border);
+    }
+    .item-num { font-family: var(--mono); font-size: 11px; color: var(--accent); font-weight: 600; }
+    .item-time { font-size: 10px; font-family: var(--mono); color: var(--muted); }
+    .btn-delete-item { background: none; border: none; cursor: pointer; color: var(--muted); padding: 2px; line-height: 0; }
+    .btn-delete-item:active { color: var(--warn); }
+    .btn-delete-item svg { width: 14px; height: 14px; }
+    .slot-list { padding: 10px 14px 12px; display: flex; flex-direction: column; gap: 7px; }
+  </style>
+</head>
+<body>
+
+<div class="header">
+  <div class="header-icon">
+    <svg viewBox="0 0 24 24" fill="none" stroke="#000" stroke-width="2.2" stroke-linecap="round">
+      <rect x="2" y="2" width="7" height="7" rx="1"/><rect x="15" y="2" width="7" height="7" rx="1"/>
+      <rect x="2" y="15" width="7" height="7" rx="1"/>
+      <line x1="15" y1="15" x2="15" y2="22"/><line x1="15" y1="15" x2="22" y2="15"/>
+      <line x1="22" y1="15" x2="22" y2="22"/><line x1="15" y1="22" x2="22" y2="22"/>
+    </svg>
+  </div>
+  <h1>바코드 &amp; QR 스캐너</h1>
+  <span class="header-sub" id="listCountBadge">목록 0개</span>
+</div>
+
+<div class="mode-badges">
+  <span class="badge barcode">■ 바코드</span>
+  <span class="badge qr">▦ QR코드</span>
+  <span class="badge info">동시 지원</span>
+</div>
+
+<div class="tabs">
+  <div class="tab active" onclick="switchTab('scan')">📷 스캔</div>
+  <div class="tab" onclick="switchTab('list')">📋 목록</div>
+</div>
+
+<!-- SCAN PANEL -->
+<div class="panel active" id="panel-scan">
+  <div class="config-bar">
+    <label>슬롯 수</label>
+    <div class="slots-toggle">
+      <button class="stoggle" onclick="setMaxSlots(1)" id="st1">1</button>
+      <button class="stoggle active" onclick="setMaxSlots(2)" id="st2">2</button>
+      <button class="stoggle" onclick="setMaxSlots(3)" id="st3">3</button>
+    </div>
+    <span style="font-size:11px;color:var(--muted);margin-left:4px">항목당 코드 수</span>
+  </div>
+
+  <div class="scanner-wrap">
+    <!-- QR: jsQR canvas 방식 -->
+    <div id="qr-canvas-wrap">
+      <video id="qr-video" playsinline autoplay muted style="display:none;"></video>
+      <canvas id="qr-canvas"></canvas>
+      <div class="viewfinder">
+        <div class="vf-box qr-mode">
+          <div class="vf-line"></div>
+          <div class="vf-corner tl"></div><div class="vf-corner tr"></div>
+          <div class="vf-corner bl"></div><div class="vf-corner br"></div>
+          <div class="vf-type-label">▦ QR CODE MODE</div>
+        </div>
+      </div>
+    </div>
+    <!-- Barcode: Quagga 방식 -->
+    <div id="barcode-wrap">
+      <div class="viewfinder">
+        <div class="vf-box barcode-mode">
+          <div class="vf-line"></div>
+          <div class="vf-corner tl"></div><div class="vf-corner tr"></div>
+          <div class="vf-corner bl"></div><div class="vf-corner br"></div>
+          <div class="vf-type-label">■ BARCODE MODE</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="scanner-controls">
+    <div class="mode-toggle">
+      <button class="mode-btn active-barcode" id="modeBarcode" onclick="setMode('barcode')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+          <rect x="2" y="6" width="2" height="12"/><rect x="6" y="6" width="1" height="12"/>
+          <rect x="9" y="6" width="2.5" height="12"/><rect x="13.5" y="6" width="1" height="12"/>
+          <rect x="16.5" y="6" width="2" height="12"/><rect x="20.5" y="6" width="1.5" height="12"/>
+        </svg>
+        바코드 모드
+      </button>
+      <button class="mode-btn" id="modeQr" onclick="setMode('qr')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+          <rect x="2" y="2" width="8" height="8" rx="1"/><rect x="14" y="2" width="8" height="8" rx="1"/>
+          <rect x="2" y="14" width="8" height="8" rx="1"/>
+          <rect x="14" y="14" width="4" height="4" rx="0.5"/>
+        </svg>
+        QR 모드
+      </button>
+    </div>
+    <button class="btn-scan" id="btnScan" onclick="toggleScanner()">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round">
+        <path d="M3 7V5a2 2 0 012-2h2M17 3h2a2 2 0 012 2v2M21 17v2a2 2 0 01-2 2h-2M7 21H5a2 2 0 01-2-2v-2"/>
+        <line x1="7" y1="12" x2="17" y2="12"/>
+      </svg>
+      카메라 시작
+    </button>
+  </div>
+
+  <div class="result-area">
+    <div class="detected-box" id="detectedBox">
+      <div class="detected-label lbl-barcode" id="detectedLabel">
+        감지된 코드 <span class="type-pill pill-barcode" id="typePill">BARCODE</span>
+      </div>
+      <div class="detected-value empty" id="detectedVal">스캔 대기 중...</div>
+      <div id="slotSection" style="display:none">
+        <div class="slot-label">저장할 슬롯 선택</div>
+        <div class="slot-row" id="slotRow"></div>
+        <button class="btn-save" id="btnSave" onclick="saveToSlot()" disabled>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" width="16" height="16">
+            <path d="M19 21H5a2 2 0 01-2-2V5a2 2 0 012-2h11l5 5v13a2 2 0 01-2 2z"/>
+            <polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/>
+          </svg>
+          슬롯에 저장
+        </button>
+      </div>
+    </div>
+
+    <div class="preview-box">
+      <div class="detected-label lbl-barcode" style="margin-bottom:10px">현재 항목 미리보기</div>
+      <div id="currentSlotPreview" style="display:flex;flex-direction:column;gap:7px;"></div>
+      <div class="action-row">
+        <button class="btn-confirm" id="btnConfirm" onclick="confirmItem()" disabled>✅ 목록에 추가</button>
+        <button class="btn-reset" onclick="resetCurrent()">🗑 초기화</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- LIST PANEL -->
+<div class="panel" id="panel-list">
+  <div class="list-header">
+    <h2>저장된 목록</h2>
+    <div style="display:flex;gap:12px;align-items:center">
+      <span class="list-count" id="listCountText">0개</span>
+      <button class="btn-clear-all" onclick="clearAll()">전체 삭제</button>
+    </div>
+  </div>
+  <div class="list-body" id="listBody"></div>
+</div>
+
+<div class="toast neutral" id="toast"></div>
+
 <script>
-  // ── 추가된 전역 상태 ──
-  let scanLock = false;        // 0.5초 잠금
-  let lastScannedValue = null; // 중복 방지
+  // ── State ──
+  let scanning = false;
+  let currentMode = 'barcode'; // 'barcode' | 'qr'
+  let maxSlots = 2;
+  let selectedSlot = 0;
+  let currentSlots = [];
+  let lastDetected = null;
+  let savedList = JSON.parse(localStorage.getItem('barcodeQrList') || '[]');
 
-  // 🔊 사운드 생성 함수 (외부 파일 없이 사용)
-  function playBeep(type) {
-    const ctx = new (window.AudioContext || window.webkitAudioContext)();
-    const osc = ctx.createOscillator();
-    const gain = ctx.createGain();
+  // QR
+  let qrStream = null;
+  let qrAnimFrame = null;
 
-    osc.connect(gain);
-    gain.connect(ctx.destination);
+  function init() { resetCurrent(); renderList(); updateBadge(); }
 
-    // QR / 바코드 소리 구분
-    if (type === 'qr') {
-      osc.frequency.value = 1200;
-    } else {
-      osc.frequency.value = 800;
-    }
-
-    osc.type = 'sine';
-    gain.gain.value = 0.1;
-
-    osc.start();
-    setTimeout(() => {
-      osc.stop();
-      ctx.close();
-    }, 100);
+  // ── Tab ──
+  function switchTab(tab) {
+    document.querySelectorAll('.tab').forEach((t, i) => t.classList.toggle('active', ['scan','list'][i] === tab));
+    document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
+    document.getElementById('panel-' + tab).classList.add('active');
+    if (tab === 'list') renderList();
   }
 
-  // 📳 진동 패턴
-  function vibrateByType(type) {
-    if (!navigator.vibrate) return;
+  // ── Slot config ──
+  function setMaxSlots(n) {
+    maxSlots = n;
+    [1,2,3].forEach(i => document.getElementById('st'+i).classList.toggle('active', i === n));
+    resetCurrent();
+  }
 
-    if (type === 'qr') {
-      navigator.vibrate([100, 50, 100]); // QR: 두번
-    } else {
-      navigator.vibrate(120); // 바코드: 한번
+  // ── Mode ──
+  function setMode(mode) {
+    if (scanning) { showToast('스캔을 먼저 중지하세요', 'del'); return; }
+    currentMode = mode;
+    const isQr = mode === 'qr';
+    document.getElementById('modeBarcode').className = 'mode-btn' + (!isQr ? ' active-barcode' : '');
+    document.getElementById('modeQr').className = 'mode-btn' + (isQr ? ' active-qr' : '');
+  }
+
+  // ── Toggle ──
+  function toggleScanner() {
+    if (scanning) stopAll();
+    else currentMode === 'qr' ? startQR() : startBarcode();
+  }
+
+  // ── UI helpers ──
+  function setScanningBtn() {
+    const btn = document.getElementById('btnScan');
+    btn.className = 'btn-scan scanning';
+    btn.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="9" y1="9" x2="15" y2="15"/><line x1="15" y1="9" x2="9" y2="15"/></svg> 스캔 중지`;
+  }
+  function setIdleBtn() {
+    const btn = document.getElementById('btnScan');
+    btn.className = 'btn-scan';
+    btn.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M3 7V5a2 2 0 012-2h2M17 3h2a2 2 0 012 2v2M21 17v2a2 2 0 01-2 2h-2M7 21H5a2 2 0 01-2-2v-2"/><line x1="7" y1="12" x2="17" y2="12"/></svg> 카메라 시작`;
+  }
+
+  // ══════════════════════════════════
+  //  QR 스캐너 (jsQR + canvas)
+  // ══════════════════════════════════
+  async function startQR() {
+    const btn = document.getElementById('btnScan');
+    btn.disabled = true; btn.textContent = '카메라 준비 중...';
+    try {
+      qrStream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: 'environment', width: { ideal: 1280 }, height: { ideal: 720 } }
+      });
+      const video = document.getElementById('qr-video');
+      video.srcObject = qrStream;
+      await video.play();
+
+      document.getElementById('qr-canvas-wrap').style.display = 'block';
+      document.getElementById('barcode-wrap').style.display = 'none';
+
+      scanning = true;
+      btn.disabled = false;
+      setScanningBtn();
+      tickQR();
+    } catch(e) {
+      showToast('카메라 오류: ' + (e.message || e), 'del');
+      btn.disabled = false; setIdleBtn();
     }
   }
 
-  // ─────────────────────────────
-  // 🔥 완전 강화된 onDetected
-  // ─────────────────────────────
+  let qrCooldown = false;
+  function tickQR() {
+    const video = document.getElementById('qr-video');
+    const canvas = document.getElementById('qr-canvas');
+    if (!scanning || video.readyState < 2) { qrAnimFrame = requestAnimationFrame(tickQR); return; }
+
+    const vw = video.videoWidth, vh = video.videoHeight;
+    canvas.width = vw; canvas.height = vh;
+    const ctx = canvas.getContext('2d');
+    ctx.drawImage(video, 0, 0, vw, vh);
+
+    if (!qrCooldown) {
+      const imageData = ctx.getImageData(0, 0, vw, vh);
+      const code = jsQR(imageData.data, imageData.width, imageData.height, { inversionAttempts: 'dontInvert' });
+      if (code && code.data) {
+        qrCooldown = true;
+        setTimeout(() => qrCooldown = false, 1400);
+        onDetected(code.data, 'qr');
+      }
+    }
+    qrAnimFrame = requestAnimationFrame(tickQR);
+  }
+
+  function stopQR() {
+    if (qrAnimFrame) { cancelAnimationFrame(qrAnimFrame); qrAnimFrame = null; }
+    if (qrStream) { qrStream.getTracks().forEach(t => t.stop()); qrStream = null; }
+    document.getElementById('qr-canvas-wrap').style.display = 'none';
+  }
+
+  // ══════════════════════════════════
+  //  바코드 스캐너 (Quagga)
+  // ══════════════════════════════════
+  function startBarcode() {
+    const btn = document.getElementById('btnScan');
+    btn.disabled = true; btn.textContent = '카메라 준비 중...';
+
+    document.getElementById('barcode-wrap').style.display = 'block';
+    document.getElementById('qr-canvas-wrap').style.display = 'none';
+
+    Quagga.init({
+      inputStream: {
+        name: 'Live', type: 'LiveStream',
+        target: document.getElementById('barcode-wrap'),
+        constraints: { facingMode: 'environment', width: { ideal: 1280 }, height: { ideal: 720 } }
+      },
+      decoder: {
+        readers: ['ean_reader','ean_8_reader','code_128_reader','code_39_reader',
+                  'upc_reader','upc_e_reader','codabar_reader','i2of5_reader']
+      },
+      locate: true
+    }, err => {
+      btn.disabled = false;
+      if (err) { showToast('카메라 오류: ' + (err.message || err), 'del'); stopBarcode(); return; }
+      Quagga.start();
+      scanning = true;
+      setScanningBtn();
+    });
+
+    let barcodeCooldown = false;
+    Quagga.onDetected(result => {
+      if (barcodeCooldown) return;
+      const code = result?.codeResult?.code;
+      if (!code) return;
+      barcodeCooldown = true;
+      setTimeout(() => barcodeCooldown = false, 1400);
+      onDetected(code, 'barcode');
+    });
+  }
+
+  function stopBarcode() {
+    try { Quagga.offDetected(); Quagga.stop(); } catch(e) {}
+    document.getElementById('barcode-wrap').style.display = 'none';
+  }
+
+  function stopAll() {
+    stopQR();
+    stopBarcode();
+    scanning = false;
+    setIdleBtn();
+  }
+
+  // ── Detected ──
   function onDetected(value, type) {
-
-    // ❌ 0.5초 잠금
-    if (scanLock) return;
-
-    // ❌ 동일 코드 반복 방지
-    if (value === lastScannedValue) return;
-
-    scanLock = true;
-    lastScannedValue = value;
-
-    setTimeout(() => {
-      scanLock = false;
-    }, 500);
-
+    lastDetected = { value, type };
     const isQr = type === 'qr';
 
-    // UI 업데이트
-    document.getElementById('detectedBox').className =
-      'detected-box ' + (isQr ? 'hl-qr' : 'hl-barcode');
-
-    document.getElementById('detectedLabel').className =
-      'detected-label ' + (isQr ? 'lbl-qr' : 'lbl-barcode');
-
+    document.getElementById('detectedBox').className = 'detected-box ' + (isQr ? 'hl-qr' : 'hl-barcode');
+    document.getElementById('detectedLabel').className = 'detected-label ' + (isQr ? 'lbl-qr' : 'lbl-barcode');
     const pill = document.getElementById('typePill');
     pill.className = 'type-pill ' + (isQr ? 'pill-qr' : 'pill-barcode');
     pill.textContent = isQr ? 'QR CODE' : 'BARCODE';
@@ -75,46 +581,128 @@
     const val = document.getElementById('detectedVal');
     val.textContent = value;
     val.classList.remove('empty');
+    document.getElementById('slotSection').style.display = 'block';
+    document.getElementById('btnSave').disabled = false;
 
-    // 🔊 사운드 + 📳 진동
-    playBeep(type);
-    vibrateByType(type);
-
+    if (navigator.vibrate) navigator.vibrate(80);
     showToast(isQr ? '▦ QR코드 감지!' : '■ 바코드 감지!', isQr ? 'qr' : 'barcode');
-
-    lastDetected = { value, type };
-
-    // 🔥 자동 저장
-    autoSaveToSlot();
   }
 
-  // ─────────────────────────────
-  // 🔥 자동 저장 로직
-  // ─────────────────────────────
-  function autoSaveToSlot() {
-    if (!lastDetected) return;
-
-    currentSlots[selectedSlot] = { ...lastDetected };
-
-    showToast(`슬롯 ${selectedSlot + 1} 자동 저장`, 'neutral');
-
-    const nextEmpty = currentSlots.findIndex(s => s === null);
-
-    if (nextEmpty !== -1) {
-      selectedSlot = nextEmpty;
-    } else {
-      // 슬롯 다 찼으면 자동 저장
-      confirmItem();
-      showToast('자동으로 목록에 추가됨', 'neutral');
-    }
-
-    lastDetected = null;
-
-    document.getElementById('detectedVal').textContent = '다음 코드 스캔 중...';
+  // ── Slots ──
+  function resetCurrent() {
+    currentSlots = Array(maxSlots).fill(null);
+    selectedSlot = 0; lastDetected = null;
+    document.getElementById('detectedVal').textContent = '스캔 대기 중...';
     document.getElementById('detectedVal').classList.add('empty');
     document.getElementById('detectedBox').className = 'detected-box';
-
-    renderSlotBtns();
-    renderPreview();
+    document.getElementById('slotSection').style.display = 'none';
+    document.getElementById('btnSave').disabled = true;
+    renderSlotBtns(); renderPreview();
   }
+
+  function renderSlotBtns() {
+    const row = document.getElementById('slotRow'); row.innerHTML = '';
+    for (let i = 0; i < maxSlots; i++) {
+      const slot = currentSlots[i];
+      let cls = 'slot-btn' + (i === selectedSlot ? ' selected' : '');
+      if (slot) cls += slot.type === 'qr' ? ' filled-qr' : ' filled';
+      const btn = document.createElement('button');
+      btn.className = cls;
+      btn.textContent = `슬롯 ${i+1}` + (slot ? (slot.type === 'qr' ? ' ▦' : ' ■') : '');
+      btn.onclick = () => { selectedSlot = i; renderSlotBtns(); };
+      row.appendChild(btn);
+    }
+  }
+
+  function saveToSlot() {
+    if (!lastDetected) return;
+    currentSlots[selectedSlot] = { ...lastDetected };
+    showToast(`슬롯 ${selectedSlot+1}에 저장됨`, 'neutral');
+    lastDetected = null;
+    document.getElementById('detectedVal').textContent = '다음 코드 스캔 대기...';
+    document.getElementById('detectedVal').classList.add('empty');
+    document.getElementById('detectedBox').className = 'detected-box';
+    document.getElementById('slotSection').style.display = 'none';
+    document.getElementById('btnSave').disabled = true;
+    const nextEmpty = currentSlots.findIndex(s => s === null);
+    if (nextEmpty !== -1) selectedSlot = nextEmpty;
+    renderSlotBtns(); renderPreview();
+  }
+
+  function renderPreview() {
+    const wrap = document.getElementById('currentSlotPreview'); wrap.innerHTML = '';
+    for (let i = 0; i < maxSlots; i++) {
+      const slot = currentSlots[i];
+      const row = document.createElement('div'); row.className = 'slot-entry';
+      const tagCls = slot ? ('slot-tag ' + (slot.type === 'qr' ? 'tag-qr' : 'tag-barcode')) : 'slot-tag';
+      const icon = slot ? (slot.type === 'qr' ? '▦' : '■') : '';
+      row.innerHTML = `<span class="${tagCls}">${icon} 슬롯${i+1}</span><span class="slot-val${slot ? '' : ' empty-slot'}">${slot ? slot.value : '비어있음'}</span>`;
+      wrap.appendChild(row);
+    }
+    document.getElementById('btnConfirm').disabled = !currentSlots.some(s => s !== null);
+  }
+
+  function confirmItem() {
+    const item = {
+      id: Date.now(), time: new Date().toLocaleString('ko-KR'),
+      slots: currentSlots.map(s => s ? { value: s.value, type: s.type } : null)
+    };
+    savedList.unshift(item);
+    localStorage.setItem('barcodeQrList', JSON.stringify(savedList));
+    showToast('목록에 추가됐습니다!', 'neutral');
+    resetCurrent(); updateBadge(); renderList();
+  }
+
+  // ── List ──
+  function renderList() {
+    const body = document.getElementById('listBody');
+    if (!savedList.length) {
+      body.innerHTML = `<div class="empty-state"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="2" y="2" width="8" height="8" rx="1"/><rect x="14" y="2" width="8" height="8" rx="1"/><rect x="2" y="14" width="8" height="8" rx="1"/><rect x="14" y="14" width="4" height="4"/></svg><p>저장된 항목이 없습니다.<br>바코드 또는 QR코드를 스캔해 추가하세요.</p></div>`;
+      return;
+    }
+    body.innerHTML = savedList.map((item, idx) => `
+      <div class="list-item">
+        <div class="item-header">
+          <span class="item-num">#${String(savedList.length - idx).padStart(3,'0')}</span>
+          <span class="item-time">${item.time}</span>
+          <button class="btn-delete-item" onclick="deleteItem(${item.id})">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6M14 11v6"/></svg>
+          </button>
+        </div>
+        <div class="slot-list">
+          ${item.slots.map((s, i) => {
+            const tagCls = s ? ('slot-tag ' + (s.type === 'qr' ? 'tag-qr' : 'tag-barcode')) : 'slot-tag';
+            const icon = s ? (s.type === 'qr' ? '▦' : '■') : '';
+            return `<div class="slot-entry"><span class="${tagCls}">${icon} 슬롯${i+1}</span><span class="slot-val${s ? '' : ' empty-slot'}">${s ? s.value : '(비어있음)'}</span></div>`;
+          }).join('')}
+        </div>
+      </div>`).join('');
+    document.getElementById('listCountText').textContent = `${savedList.length}개`;
+  }
+
+  function deleteItem(id) {
+    savedList = savedList.filter(i => i.id !== id);
+    localStorage.setItem('barcodeQrList', JSON.stringify(savedList));
+    renderList(); updateBadge(); showToast('삭제됐습니다', 'del');
+  }
+
+  function clearAll() {
+    if (!confirm('모든 항목을 삭제하시겠습니까?')) return;
+    savedList = []; localStorage.setItem('barcodeQrList', JSON.stringify(savedList));
+    renderList(); updateBadge(); showToast('전체 삭제 완료', 'del');
+  }
+
+  function updateBadge() { document.getElementById('listCountBadge').textContent = `목록 ${savedList.length}개`; }
+
+  let toastTimer;
+  function showToast(msg, type = 'neutral') {
+    const t = document.getElementById('toast');
+    t.textContent = msg; t.className = `toast ${type} show`;
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => t.classList.remove('show'), 2200);
+  }
+
+  init();
 </script>
+</body>
+</html>
